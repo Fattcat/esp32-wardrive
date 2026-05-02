@@ -2,7 +2,7 @@
 
 # 🛰️ ESP32-S3 Wardriving System (GPS-RSSI Fusion)
 
-Tento projekt slúži na precízny zber Wi-Fi dát (SSID, BSSID, RSSI) a ich následné priradenie k reálnym budovám pomocou GPS súradníc z modulu NEO-6M. Systém je navrhnutý pre výskumné účely v oblasti kybernetickej bezpečnosti (vulnerability research) a analýzy BTS sietí.
+Tento projekt slúži na precízny zber Wi-Fi dát (SSID, BSSID, RSSI) a ich následné priradenie k reálnym budovám pomocou GPS súradníc z modulu NEO-6M. Systém je navrhnutý pre výskumné účely v oblasti kybernetickej bezpečnosti (vulnerability research)
 
 ## 🚀 Hlavné funkcie
 * **High-Density Logging:** Zaznamenáva každú vzorku (beacon) pre neskoršie štatistické spracovanie.
