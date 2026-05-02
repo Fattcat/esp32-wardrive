@@ -1,63 +1,65 @@
 import pandas as pd
 import numpy as np
 import folium
-import osmnx as ox
-from shapely.geometry import Point
+from folium.plugins import HeatMap
 
-def generate_wardrive_map(input_csv):
-    # 1. Načítanie a základné spracovanie
-    df = pd.read_csv(input_csv)
-    df = df[(df['rssi'] > -85) & (df['hdop'] < 2.5)]
+def analyze_wardrive(file_path):
+    df = pd.read_csv(file_path)
+    
+    # Odstránenie extrémnych nepresností
+    df = df[(df['hdop'] < 2.0) & (df['rssi'] > -85)]
 
-    # Výpočet váženého centroidu (predošlá logika)
-    def get_centroid(group):
-        weights = np.power(group['rssi'] + 100, 4)
+    def calculate_smart_centroid(group):
+        if len(group) < 3: return None # Ignorujeme náhodné zachytenia
+        
+        # Odstránenie outlierov v polohe (napr. ak GPS "skočilo")
+        q1_lat, q3_lat = group['lat'].quantile([0.25, 0.75])
+        q1_lon, q3_lon = group['lon'].quantile([0.25, 0.75])
+        iqr_lat = q3_lat - q1_lat
+        iqr_lon = q3_lon - q1_lon
+        
+        filtered = group[
+            (group['lat'] >= q1_lat - 1.5*iqr_lat) & (group['lat'] <= q3_lat + 1.5*iqr_lat) &
+            (group['lon'] >= q1_lon - 1.5*iqr_lon) & (group['lon'] <= q3_lon + 1.5*iqr_lon)
+        ]
+
+        if filtered.empty: filtered = group
+
+        # Váha: Exponenciálne RSSI
+        # Normalizujeme RSSI (napr. -30 je silné, -85 slabé)
+        weights = np.exp((filtered['rssi'] + 90) / 10)
+        
         return pd.Series({
-            'lat': np.sum(group['lat'] * weights) / np.sum(weights),
-            'lon': np.sum(group['lon'] * weights) / np.sum(weights),
-            'max_rssi': group['rssi'].max()
+            'lat': np.sum(filtered['lat'] * weights) / np.sum(weights),
+            'lon': np.sum(filtered['lon'] * weights) / np.sum(weights),
+            'max_rssi': filtered['rssi'].max(),
+            'count': len(filtered)
         })
 
-    routers = df.groupby('bssid').apply(get_centroid).reset_index()
+    # Spracovanie
+    results = df.groupby('bssid').apply(calculate_smart_centroid).dropna().reset_index()
 
-    # 2. Získanie budov z OpenStreetMap (OSM)
-    # Stiahneme budovy v okolí priemerného bodu tvojej trasy (napr. rádius 1km)
-    avg_lat, avg_lon = routers['lat'].mean(), routers['lon'].mean()
-    print("Sťahujem mapové podklady z OpenStreetMap...")
-    buildings = ox.features_from_point((avg_lat, avg_lon), tags={'building': True}, dist=1000)
-
-    # 3. Vytvorenie mapy
-    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=17, tiles='cartodbpositron')
-
-    # Pridanie vrstvy budov do HTML mapy pre vizuálnu kontrolu
-    folium.GeoJson(buildings.to_json(), name="Budovy (OSM)", 
-                   style_function=lambda x: {'fillColor': 'gray', 'color': 'black', 'weight': 0.5, 'fillOpacity': 0.2}
-                  ).add_to(m)
-
-    # 4. Priradenie routerov a ich zobrazenie
-    for _, row in routers.iterrows():
-        point = Point(row['lon'], row['lat'])
-        
-        # Nájdenie najbližšej budovy a jej adresy (ak existuje v OSM)
-        # Toto priradí súradnicu priamo k objektu budovy
-        distances = buildings.distance(point)
-        nearest_idx = distances.idxmin()
-        building_info = buildings.loc[nearest_idx]
-        
-        addr = building_info.get('addr:street', 'Neznáma ulica')
-        num = building_info.get('addr:housenumber', '?')
-
-        # Výber farby podľa sily signálu
-        color = 'green' if row['max_rssi'] > -65 else 'orange' if row['max_rssi'] > -80 else 'red'
-
-        folium.Marker(
+    # Tvorba mapy
+    m = folium.Map(location=[results['lat'].mean(), results['lon'].mean()], zoom_start=16)
+    
+    # Vrstva 1: Body routerov
+    for _, row in results.iterrows():
+        color = 'green' if row['max_rssi'] > -60 else 'blue' if row['max_rssi'] > -75 else 'red'
+        folium.CircleMarker(
             location=[row['lat'], row['lon']],
-            popup=f"<b>BSSID:</b> {row['bssid']}<br><b>RSSI:</b> {row['max_rssi']} dBm<br><b>Budova:</b> {addr} {num}",
-            icon=folium.Icon(color=color, icon='wifi', prefix='fa')
+            radius=6,
+            popup=f"BSSID: {row['bssid']}<br>RSSI: {row['max_rssi']}dBm",
+            color=color,
+            fill=True
         ).add_to(m)
 
-    m.save('wardrive_results.html')
-    print("Mapa hotová! Otvor 'wardrive_results.html'.")
+    # Vrstva 2: HeatMap (hustota sietí)
+    heat_data = [[row['lat'], row['lon']] for _, row in results.iterrows()]
+    HeatMap(heat_data, name="Hustota sietí").add_to(m)
 
-# Spusti s tvojím súborom
-generate_wardrive_map('wardrive.csv')
+    folium.LayerControl().add_to(m)
+    m.save('wardrive_vylepseny.html')
+    print("Analýza hotová. Otvorte wardrive_vylepseny.html")
+
+if __name__ == "__main__":
+    analyze_wardrive('wardrive.csv')
